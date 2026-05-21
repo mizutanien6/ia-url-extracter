@@ -8,46 +8,53 @@
 </head>
 <body>
     <div class="container">
-        <div class="card">
-            <label for="userInput">EMAIL ADDRESS OR ITEM URL</label>
-            <input type="text" id="userInput" placeholder="mizutanien1@gmail.com">
+        <h1>IA URL Extractor</h1>
 
-            <label for="mediaType">MEDIA TYPE</label>
-            <select id="mediaType">
-                <option value="">All</option>
-                <option value="audio">Audio</option>
-                <option value="etree">Etrees</option>
-                <option value="movies">Movies</option>
-                <option value="texts">Texts</option>
-                <option value="software">Software</option>
-                <option value="image">Image</option>
-                <option value="data">Data</option>
-                <option value="web">Web</option>
-            </select>
+        <div class="form-section">
+            <div class="field">
+                <label for="userInput">EMAIL ADDRESS OR ITEM URL</label>
+                <input type="text" id="userInput" placeholder="mizutanien1@gmail.com">
+            </div>
 
-            <div class="checkbox-row">
-                <input type="checkbox" id="alsoZip">
-                <label for="alsoZip">ALSO OUTPUT ORIGINAL ZIP LINKS ( archive.org/compress/... )</label>
+            <div class="field">
+                <label for="mediaType">MEDIA TYPE</label>
+                <select id="mediaType">
+                    <option value="">All</option>
+                    <option value="audio">Audio</option>
+                    <option value="etree">Etrees</option>
+                    <option value="movies">Movies</option>
+                    <option value="texts">Texts</option>
+                    <option value="software">Software</option>
+                    <option value="image">Image</option>
+                    <option value="data">Data</option>
+                    <option value="web">Web</option>
+                </select>
+            </div>
+
+            <div class="field checkbox-field">
+                <label>
+                    <input type="checkbox" id="alsoZip">
+                    ALSO OUTPUT ORIGINAL ZIP LINKS&nbsp;( <code>archive.org/compress/…</code> )
+                </label>
             </div>
 
             <div class="button-row">
-                <button id="extractBtn" class="btn-primary">▶ Extract URLs</button>
-                <button id="stopBtn" class="btn-secondary" disabled>■ Stop</button>
+                <button id="startBtn">▶ Extract URLs</button>
+                <button id="stopBtn" disabled>■ Stop</button>
             </div>
         </div>
 
-        <div class="card" id="logCard">
-            <div id="statusText">Ready</div>
-        </div>
+        <div class="status-box" id="statusText">Ready</div>
 
-        <div class="card">
+        <div class="results-section">
             <div class="results-header">
-                <h2>RESULTS <span id="countBadge" class="badge">0 items</span></h2>
+                <h2>RESULTS</h2>
+                <span class="count-badge" id="countBadge">0 items</span>
             </div>
             <textarea id="resultArea" readonly></textarea>
-            <div class="button-row">
-                <button id="copyBtn" class="btn-action">Copy URLs</button>
-                <button id="downloadBtn" class="btn-action">⬇ Download Details .txt</button>
+            <div class="download-buttons">
+                <button id="copyBtn">Copy URLs</button>
+                <button id="downloadBtn">⬇ Download .txt</button>
             </div>
         </div>
     </div>
@@ -56,7 +63,7 @@
         const userInput   = document.getElementById('userInput');
         const mediaType   = document.getElementById('mediaType');
         const alsoZip     = document.getElementById('alsoZip');
-        const extractBtn  = document.getElementById('extractBtn');
+        const startBtn    = document.getElementById('startBtn');
         const stopBtn     = document.getElementById('stopBtn');
         const statusText  = document.getElementById('statusText');
         const countBadge  = document.getElementById('countBadge');
@@ -67,47 +74,39 @@
         let isRunning = false;
         let seenIds   = new Set();
 
-        extractBtn.addEventListener('click', () => {
+        startBtn.addEventListener('click', () => {
             if (isRunning) return;
             const input = userInput.value.trim();
-            if (!input) {
-                statusText.textContent = 'Please enter an email or item URL.';
-                return;
-            }
+            if (!input) { statusText.textContent = 'Please enter an email or item URL.'; return; }
             startFetch(input, mediaType.value);
         });
 
         stopBtn.addEventListener('click', () => {
             isRunning = false;
             statusText.textContent = 'Stopped.';
-            extractBtn.disabled = false;
+            startBtn.disabled = false;
             stopBtn.disabled = true;
         });
 
         copyBtn.addEventListener('click', async () => {
             try {
                 await navigator.clipboard.writeText(resultArea.value);
-                const original = copyBtn.textContent;
+                const orig = copyBtn.textContent;
                 copyBtn.textContent = 'Copied!';
-                setTimeout(() => copyBtn.textContent = original, 1500);
-            } catch (err) {
-                alert('Copy failed: ' + err);
-            }
+                setTimeout(() => copyBtn.textContent = orig, 1500);
+            } catch (err) { alert('Copy failed: ' + err); }
         });
 
         downloadBtn.addEventListener('click', () => {
             const content = resultArea.value;
             if (!content.trim()) return;
             const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/download';
+            form.method = 'POST'; form.action = '/download';
             const c = document.createElement('input');
             c.type = 'hidden'; c.name = 'content'; c.value = content;
             const f = document.createElement('input');
-            f.type = 'hidden'; f.name = 'filename';
-            f.value = 'archive_urls.txt';
-            form.appendChild(c);
-            form.appendChild(f);
+            f.type = 'hidden'; f.name = 'filename'; f.value = 'archive_urls.txt';
+            form.appendChild(c); form.appendChild(f);
             document.body.appendChild(form);
             form.submit();
             document.body.removeChild(form);
@@ -117,35 +116,31 @@
             isRunning = true;
             seenIds.clear();
             resultArea.value = '';
-            extractBtn.disabled = true;
+            startBtn.disabled = true;
             stopBtn.disabled = false;
             statusText.textContent = 'Resolving uploader...';
 
-            // ── Step 1: メール解決（1回だけ）────────────────────────
+            // Step 1: メール解決（1回だけ）
             let email = '';
             try {
-                const res = await fetch(`/resolve?user_input=${encodeURIComponent(input)}`);
+                const res  = await fetch(`/resolve?user_input=${encodeURIComponent(input)}`);
                 const data = await res.json();
                 if (!res.ok || data.error) {
                     statusText.textContent = 'Error: ' + (data.error || 'resolve failed');
-                    extractBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    isRunning = false;
+                    startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                     return;
                 }
                 email = data.email;
-                userInput.value = email;   // 入力欄をメールで上書き
+                userInput.value = email;
             } catch (err) {
                 statusText.textContent = 'Error: ' + err.message;
-                extractBtn.disabled = false;
-                stopBtn.disabled = true;
-                isRunning = false;
+                startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                 return;
             }
 
             if (!isRunning) return;
 
-            // ── Step 2: バッチ取得ループ（emailを直接渡す）──────────
+            // Step 2: バッチ取得ループ
             let cursor = null;
             let count  = 0;
             let total  = 0;
@@ -155,12 +150,9 @@
                 if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
 
                 try {
-                    const res = await fetch(url);
+                    const res  = await fetch(url);
                     const data = await res.json();
-
-                    if (!res.ok || data.error) {
-                        throw new Error(data.error || 'HTTP ' + res.status);
-                    }
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
 
                     if (total === 0 && data.total) total = data.total;
 
@@ -169,10 +161,8 @@
                         if (!isRunning) break;
                         if (seenIds.has(ident)) continue;
                         seenIds.add(ident);
-
-                        const detail   = `https://archive.org/details/${ident}`;
-                        const compress = `https://archive.org/compress/${ident}`;
-                        lines.push(alsoZip.checked ? detail + '\t' + compress : detail);
+                        const detail = `https://archive.org/details/${ident}`;
+                        lines.push(alsoZip.checked ? detail + '\t' + `https://archive.org/compress/${ident}` : detail);
                         count++;
                     }
 
@@ -182,7 +172,7 @@
 
                     const totalStr = total ? total.toLocaleString() : '?';
                     countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
-                    statusText.textContent = `Fetching... ${count.toLocaleString()} / ${totalStr}`;
+                    statusText.textContent = `Fetching… ${count.toLocaleString()} / ${totalStr}`;
 
                     if (!data.has_more) {
                         statusText.textContent = `Complete: ${count.toLocaleString()} items`;
@@ -194,13 +184,13 @@
 
                 } catch (err) {
                     if (!isRunning) break;
-                    statusText.textContent = `Error: ${err.message}. Retrying in 5s...`;
+                    statusText.textContent = `Error: ${err.message}. Retrying in 5s…`;
                     await new Promise(r => setTimeout(r, 5000));
                 }
             }
 
             isRunning = false;
-            extractBtn.disabled = false;
+            startBtn.disabled = false;
             stopBtn.disabled = true;
             if (statusText.textContent.startsWith('Fetching')) {
                 statusText.textContent = `Complete: ${seenIds.size.toLocaleString()} items`;
