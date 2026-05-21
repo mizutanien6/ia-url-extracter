@@ -1,29 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Internet Archive URL Extractor</title>
+    <title>IA URL Extractor</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<div class="container">
+    <div class="container">
+        <div class="card">
+            <label for="userInput">EMAIL ADDRESS OR ITEM URL</label>
+            <input type="text" id="userInput" placeholder="mizutanien1@gmail.com">
 
-    <h1>Internet Archive URL Extractor</h1>
-
-    <div class="form-section">
-
-        <div class="field">
-            <label for="userInput">Email Address or Item URL</label>
-            <input type="text" id="userInput"
-                   placeholder="user@example.com  or  https://archive.org/details/...">
-        </div>
-
-        <div class="field">
-            <label for="mediatype">Media Type</label>
-            <select id="mediatype">
+            <label for="mediaType">MEDIA TYPE</label>
+            <select id="mediaType">
                 <option value="">All</option>
                 <option value="audio">Audio</option>
+                <option value="etree">Etrees</option>
                 <option value="movies">Movies</option>
                 <option value="texts">Texts</option>
                 <option value="software">Software</option>
@@ -31,240 +24,165 @@
                 <option value="data">Data</option>
                 <option value="web">Web</option>
             </select>
+
+            <div class="checkbox-row">
+                <input type="checkbox" id="alsoZip">
+                <label for="alsoZip">ALSO OUTPUT ORIGINAL ZIP LINKS ( archive.org/compress/... )</label>
+            </div>
+
+            <div class="button-row">
+                <button id="extractBtn" class="btn-primary">▶ Extract URLs</button>
+                <button id="stopBtn" class="btn-secondary" disabled>■ Stop</button>
+            </div>
         </div>
 
-        <div class="field checkbox-field">
-            <label>
-                <input type="checkbox" id="originalMode">
-                Also output Original ZIP links (<code>archive.org/compress/…</code>)
-            </label>
+        <div class="card" id="logCard">
+            <div id="statusText">Ready</div>
         </div>
 
-        <div class="button-row">
-            <button id="startBtn" onclick="startScraping()">▶ Extract URLs</button>
-            <button id="stopBtn"  onclick="stopScraping()" disabled>■ Stop</button>
+        <div class="card">
+            <div class="results-header">
+                <h2>RESULTS <span id="countBadge" class="badge">0 items</span></h2>
+            </div>
+            <textarea id="resultArea" readonly></textarea>
+            <div class="button-row">
+                <button id="copyBtn" class="btn-action">Copy URLs</button>
+                <button id="downloadBtn" class="btn-action">⬇ Download Details .txt</button>
+            </div>
         </div>
-
     </div>
 
-    <div id="statusBox" class="status-box">Ready.</div>
+    <script>
+        const userInput   = document.getElementById('userInput');
+        const mediaType   = document.getElementById('mediaType');
+        const alsoZip     = document.getElementById('alsoZip');
+        const extractBtn  = document.getElementById('extractBtn');
+        const stopBtn     = document.getElementById('stopBtn');
+        const statusText  = document.getElementById('statusText');
+        const countBadge  = document.getElementById('countBadge');
+        const resultArea  = document.getElementById('resultArea');
+        const copyBtn     = document.getElementById('copyBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
 
-    <div class="results-section">
+        let isRunning = false;
+        let seenUrls  = new Set();
 
-        <div class="results-header">
-            <h2>Results</h2>
-            <span id="countBadge" class="count-badge" style="display:none"></span>
-        </div>
-
-        <textarea id="resultsBox" readonly placeholder="Details URLs will appear here…"></textarea>
-
-        <div class="download-buttons">
-            <button onclick="copyBox('resultsBox')">Copy URLs</button>
-            <button onclick="downloadBox('archive_details_urls.txt', detailBuf)">⬇ Download Details .txt</button>
-            <button id="btnZipDl" onclick="downloadBox('archive_compress_urls.txt', zipBuf)"
-                    style="display:none">⬇ Download Original ZIPs .txt</button>
-        </div>
-
-    </div>
-
-</div>
-
-<script>
-// ── State ──────────────────────────────────────────────────────────
-let evtSrc       = null;
-let reqId        = null;
-let running      = false;
-let detailBuf    = [];
-let zipBuf       = [];
-let pendingLines = [];
-let flushedCount = 0;
-let rafId        = null;
-let totalItems   = null;
-let dotInterval  = null;
-let dotPhase     = 0;
-
-// ── Batched DOM flush (requestAnimationFrame) ──────────────────────
-function scheduleFlush() {
-    if (!rafId) rafId = requestAnimationFrame(doFlush);
-}
-
-function doFlush() {
-    rafId = null;
-    if (pendingLines.length === 0) return;
-
-    const box = document.getElementById('resultsBox');
-    box.value += pendingLines.join('\n') + '\n';
-    pendingLines = [];
-    box.scrollTop = box.scrollHeight;
-
-    updateBadgeAndStatus();
-}
-
-function updateBadgeAndStatus() {
-    const badge = document.getElementById('countBadge');
-    badge.style.display = 'inline-block';
-    const collected = detailBuf.length;
-    badge.textContent  = collected.toLocaleString() + ' items';
-
-    if (running) {
-        const totalStr = totalItems !== null
-            ? ` / ${Number(totalItems).toLocaleString()}`
-            : '';
-        const dots = ['   ', '.  ', '.. ', '...'];
-        const d = dots[dotPhase];
-        setStatus(`Fetching items${d} ${collected.toLocaleString()}${totalStr} collected`);
-    }
-}
-
-// ── Dot animation helpers ──────────────────────────────────────────
-function startDotAnimation() {
-    stopDotAnimation();
-    dotPhase = 0;
-    dotInterval = setInterval(() => {
-        dotPhase = (dotPhase + 1) % 4;
-        if (running) updateBadgeAndStatus();
-    }, 400);
-}
-
-function stopDotAnimation() {
-    if (dotInterval) { clearInterval(dotInterval); dotInterval = null; }
-}
-
-// ── Main scraping logic ────────────────────────────────────────────
-function startScraping() {
-    const input = document.getElementById('userInput').value.trim();
-    if (!input) { alert('Please enter an email address or item URL.'); return; }
-
-    detailBuf    = [];
-    zipBuf       = [];
-    pendingLines = [];
-    flushedCount = 0;
-    totalItems   = null;
-    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-
-    document.getElementById('resultsBox').value           = '';
-    document.getElementById('countBadge').style.display   = 'none';
-    document.getElementById('countBadge').textContent     = '';
-    document.getElementById('btnZipDl').style.display     = 'none';
-
-    setStatus('Starting...');
-    setRunning(true);
-    startDotAnimation();
-
-    reqId = Date.now() + '-' + Math.random().toString(36).slice(2);
-
-    const params = new URLSearchParams({
-        user_input: input,
-        mediatype:  document.getElementById('mediatype').value,
-        req_id:     reqId
-    });
-
-    evtSrc = new EventSource('/stream?' + params);
-
-    evtSrc.onmessage = function(e) {
-        const raw = e.data;
-
-        if (raw.startsWith('FOUND|')) {
-            const parts = raw.slice(6).split('|');
-            detailBuf.push(parts[0]);
-            zipBuf.push(parts[1]);
-            pendingLines.push(parts[0]);
-            scheduleFlush();
-        }
-        else if (raw.startsWith('TOTAL|')) {
-            totalItems = raw.slice(6);
-            updateBadgeAndStatus();
-        }
-        else if (raw.startsWith('EMAIL|')) {
-            document.getElementById('userInput').value = raw.slice(6);
-        }
-        else if (raw.startsWith('LOG|')) {
-            setStatus(raw.slice(4));
-        }
-        else if (raw.startsWith('COMPLETE|')) {
-            doFlush();
-            setStatus('✓ Complete: ' + Number(raw.slice(9)).toLocaleString() + ' items found.');
-            finalize();
-        }
-        else if (raw.startsWith('CANCELLED|')) {
-            doFlush();
-            setStatus('⚠ Stopped: ' + Number(raw.slice(10)).toLocaleString() + ' items collected.');
-            finalize();
-        }
-        else if (raw.startsWith('ERROR|')) {
-            doFlush();
-            setStatus('✗ Error: ' + raw.slice(6));
-            finalize();
-        }
-    };
-
-    evtSrc.onerror = function() {
-        if (running) {
-            doFlush();
-            setStatus('Connection lost.');
-            finalize();
-        }
-    };
-}
-
-function stopScraping() {
-    if (reqId) {
-        fetch('/stop', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ req_id: reqId })
+        extractBtn.addEventListener('click', () => {
+            if (isRunning) return;
+            const input = userInput.value.trim();
+            if (!input) {
+                statusText.textContent = 'Please enter an email or item URL.';
+                return;
+            }
+            startFetch(input, mediaType.value);
         });
-    }
-    if (evtSrc) { evtSrc.close(); evtSrc = null; }
-    doFlush();
-    setStatus('⚠ Stopped: ' + detailBuf.length.toLocaleString() + ' items collected.');
-    finalize();
-}
 
-function finalize() {
-    stopDotAnimation();
-    if (evtSrc) { evtSrc.close(); evtSrc = null; }
-    setRunning(false);
+        stopBtn.addEventListener('click', () => {
+            isRunning = false;
+            statusText.textContent = 'Stopped.';
+            extractBtn.disabled = false;
+            stopBtn.disabled = true;
+        });
 
-    const originalMode = document.getElementById('originalMode').checked;
-    if (originalMode && zipBuf.length > 0) {
-        document.getElementById('btnZipDl').style.display = 'inline-block';
-    }
-}
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(resultArea.value);
+                const original = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => copyBtn.textContent = original, 1500);
+            } catch (err) {
+                alert('Copy failed: ' + err);
+            }
+        });
 
-// ── Helpers ────────────────────────────────────────────────────────
-function setRunning(state) {
-    running = state;
-    document.getElementById('startBtn').disabled = state;
-    document.getElementById('stopBtn').disabled  = !state;
-}
+        downloadBtn.addEventListener('click', () => {
+            const content = resultArea.value;
+            if (!content.trim()) return;
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/download';
+            const c = document.createElement('input');
+            c.type = 'hidden'; c.name = 'content'; c.value = content;
+            const f = document.createElement('input');
+            f.type = 'hidden'; f.name = 'filename';
+            f.value = 'archive_urls.txt';
+            form.appendChild(c);
+            form.appendChild(f);
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
+        });
 
-function setStatus(msg) {
-    document.getElementById('statusBox').textContent = msg;
-}
+        async function startFetch(input, mediatype) {
+            isRunning = true;
+            seenUrls.clear();
+            resultArea.value = '';
+            extractBtn.disabled = true;
+            stopBtn.disabled = false;
+            statusText.textContent = 'Resolving uploader...';
 
-function copyBox(id) {
-    const box = document.getElementById(id);
-    box.select();
-    document.execCommand('copy');
-    alert('Copied!');
-}
+            let cursor = null;
+            let count = 0;
+            let total = 0;
+            let email = '';
 
-function downloadBox(filename, arr) {
-    if (!arr || arr.length === 0) { alert('No URLs to download.'); return; }
-    const content = arr.join('\n');
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/download';
-    [['content', content], ['filename', filename]].forEach(([n, v]) => {
-        const el = document.createElement('input');
-        el.type = 'hidden'; el.name = n; el.value = v;
-        form.appendChild(el);
-    });
-    document.body.appendChild(form);
-    form.submit();
-    document.body.removeChild(form);
-}
-</script>
+            while (isRunning) {
+                let url = `/batch?user_input=${encodeURIComponent(input)}&mediatype=${encodeURIComponent(mediatype)}`;
+                if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+
+                try {
+                    const res = await fetch(url);
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const data = await res.json();
+
+                    if (!email && data.email) {
+                        email = data.email;
+                        userInput.value = email;
+                    }
+                    if (total === 0 && data.total) {
+                        total = data.total;
+                    }
+
+                    for (const ident of data.items) {
+                        if (!isRunning) break;
+                        if (seenUrls.has(ident)) continue;
+                        seenUrls.add(ident);
+
+                        const detail   = `https://archive.org/details/${ident}`;
+                        const compress = `https://archive.org/compress/${ident}`;
+                        let line = detail;
+                        if (alsoZip.checked) {
+                            line += '\t' + compress;
+                        }
+                        resultArea.value += (resultArea.value ? '\n' : '') + line;
+                        count++;
+                    }
+
+                    countBadge.textContent = `${count.toLocaleString()} / ${total.toLocaleString()} items`;
+                    statusText.textContent = `Fetching... ${count.toLocaleString()} / ${total.toLocaleString()}`;
+
+                    if (!data.has_more) {
+                        statusText.textContent = `Complete: ${count.toLocaleString()} items`;
+                        break;
+                    }
+
+                    cursor = data.cursor;
+                    await new Promise(r => setTimeout(r, 500));
+
+                } catch (err) {
+                    if (!isRunning) break;
+                    statusText.textContent = `Error: ${err.message}. Retrying in 3s...`;
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+            }
+
+            isRunning = false;
+            extractBtn.disabled = false;
+            stopBtn.disabled = true;
+            if (statusText.textContent.startsWith('Fetching')) {
+                statusText.textContent = `Complete: ${seenUrls.size.toLocaleString()} items`;
+            }
+        }
+    </script>
 </body>
 </html>
