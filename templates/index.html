@@ -65,7 +65,7 @@
         const downloadBtn = document.getElementById('downloadBtn');
 
         let isRunning = false;
-        let seenUrls  = new Set();
+        let seenIds   = new Set();
 
         extractBtn.addEventListener('click', () => {
             if (isRunning) return;
@@ -115,51 +115,74 @@
 
         async function startFetch(input, mediatype) {
             isRunning = true;
-            seenUrls.clear();
+            seenIds.clear();
             resultArea.value = '';
             extractBtn.disabled = true;
             stopBtn.disabled = false;
             statusText.textContent = 'Resolving uploader...';
 
-            let cursor = null;
-            let count = 0;
-            let total = 0;
+            // ── Step 1: メール解決（1回だけ）────────────────────────
             let email = '';
+            try {
+                const res = await fetch(`/resolve?user_input=${encodeURIComponent(input)}`);
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    statusText.textContent = 'Error: ' + (data.error || 'resolve failed');
+                    extractBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    isRunning = false;
+                    return;
+                }
+                email = data.email;
+                userInput.value = email;   // 入力欄をメールで上書き
+            } catch (err) {
+                statusText.textContent = 'Error: ' + err.message;
+                extractBtn.disabled = false;
+                stopBtn.disabled = true;
+                isRunning = false;
+                return;
+            }
+
+            if (!isRunning) return;
+
+            // ── Step 2: バッチ取得ループ（emailを直接渡す）──────────
+            let cursor = null;
+            let count  = 0;
+            let total  = 0;
 
             while (isRunning) {
-                let url = `/batch?user_input=${encodeURIComponent(input)}&mediatype=${encodeURIComponent(mediatype)}`;
+                let url = `/batch?email=${encodeURIComponent(email)}&mediatype=${encodeURIComponent(mediatype)}`;
                 if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
 
                 try {
                     const res = await fetch(url);
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
                     const data = await res.json();
 
-                    if (!email && data.email) {
-                        email = data.email;
-                        userInput.value = email;
-                    }
-                    if (total === 0 && data.total) {
-                        total = data.total;
+                    if (!res.ok || data.error) {
+                        throw new Error(data.error || 'HTTP ' + res.status);
                     }
 
+                    if (total === 0 && data.total) total = data.total;
+
+                    const lines = [];
                     for (const ident of data.items) {
                         if (!isRunning) break;
-                        if (seenUrls.has(ident)) continue;
-                        seenUrls.add(ident);
+                        if (seenIds.has(ident)) continue;
+                        seenIds.add(ident);
 
                         const detail   = `https://archive.org/details/${ident}`;
                         const compress = `https://archive.org/compress/${ident}`;
-                        let line = detail;
-                        if (alsoZip.checked) {
-                            line += '\t' + compress;
-                        }
-                        resultArea.value += (resultArea.value ? '\n' : '') + line;
+                        lines.push(alsoZip.checked ? detail + '\t' + compress : detail);
                         count++;
                     }
 
-                    countBadge.textContent = `${count.toLocaleString()} / ${total.toLocaleString()} items`;
-                    statusText.textContent = `Fetching... ${count.toLocaleString()} / ${total.toLocaleString()}`;
+                    if (lines.length) {
+                        resultArea.value += (resultArea.value ? '\n' : '') + lines.join('\n');
+                    }
+
+                    const totalStr = total ? total.toLocaleString() : '?';
+                    countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
+                    statusText.textContent = `Fetching... ${count.toLocaleString()} / ${totalStr}`;
 
                     if (!data.has_more) {
                         statusText.textContent = `Complete: ${count.toLocaleString()} items`;
@@ -167,12 +190,12 @@
                     }
 
                     cursor = data.cursor;
-                    await new Promise(r => setTimeout(r, 500));
+                    await new Promise(r => setTimeout(r, 300));
 
                 } catch (err) {
                     if (!isRunning) break;
-                    statusText.textContent = `Error: ${err.message}. Retrying in 3s...`;
-                    await new Promise(r => setTimeout(r, 3000));
+                    statusText.textContent = `Error: ${err.message}. Retrying in 5s...`;
+                    await new Promise(r => setTimeout(r, 5000));
                 }
             }
 
@@ -180,7 +203,7 @@
             extractBtn.disabled = false;
             stopBtn.disabled = true;
             if (statusText.textContent.startsWith('Fetching')) {
-                statusText.textContent = `Complete: ${seenUrls.size.toLocaleString()} items`;
+                statusText.textContent = `Complete: ${seenIds.size.toLocaleString()} items`;
             }
         }
     </script>

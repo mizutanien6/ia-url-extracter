@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 from flask import Flask, render_template, request, send_file, jsonify
 import urllib.request
 import urllib.parse
@@ -23,7 +26,7 @@ class IAScraper:
 
     def resolve_email(self, user_input):
         if "@" in user_input and not user_input.startswith("http"):
-            return user_input, False
+            return user_input
         if user_input.startswith("https://archive.org/details/"):
             path = (
                 user_input
@@ -36,7 +39,7 @@ class IAScraper:
                     "User profile URLs (@) are not supported. "
                     "Please enter an email address or item URL."
                 )
-            return self._email_from_metadata(path), True
+            return self._email_from_metadata(path)
         raise ValueError("Please enter an email address or item URL.")
 
     def _email_from_metadata(self, identifier):
@@ -56,16 +59,20 @@ class IAScraper:
 
         params = [
             ("q", query),
-            ("fields", "identifier,addeddate"),
+            ("fields", "identifier"),
             ("sorts", "addeddate asc"),
-            ("count", 1000),
+            ("count", 10000),   # 1000→10000: リクエスト数を1/10に削減
         ]
         if cursor:
             params.append(("cursor", cursor))
 
         data = self.fetch_url(base + "?" + urllib.parse.urlencode(params))
 
-        items = [item.get("identifier") for item in data.get("items", []) if item.get("identifier")]
+        items = [
+            item.get("identifier")
+            for item in data.get("items", [])
+            if isinstance(item, dict) and item.get("identifier")
+        ]
         return {
             "items": items,
             "cursor": data.get("cursor"),
@@ -79,18 +86,36 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/resolve")
+def resolve():
+    """メール解決専用エンドポイント（バッチ開始前に1回だけ呼ぶ）"""
+    user_input = request.args.get("user_input", "").strip()
+    if not user_input:
+        return jsonify({"error": "No input provided"}), 400
+    try:
+        scraper = IAScraper()
+        email = scraper.resolve_email(user_input)
+        return jsonify({"email": email})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @app.route("/batch")
 def batch():
-    user_input = request.args.get("user_input", "").strip()
-    mediatype  = request.args.get("mediatype", "").strip()
-    cursor     = request.args.get("cursor", "").strip() or None
+    """emailを直接受け取る（毎回のメタデータ解決をなくす）"""
+    email     = request.args.get("email", "").strip()
+    mediatype = request.args.get("mediatype", "").strip()
+    cursor    = request.args.get("cursor", "").strip() or None
 
-    scraper = IAScraper()
-    email, _ = scraper.resolve_email(user_input)
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid email address required"}), 400
 
-    result = scraper.fetch_batch(email, mediatype, cursor)
-    result["email"] = email
-    return jsonify(result)
+    try:
+        scraper = IAScraper()
+        result = scraper.fetch_batch(email, mediatype, cursor)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/download", methods=["POST"])
