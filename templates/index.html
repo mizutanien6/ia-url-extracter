@@ -21,7 +21,7 @@
                 <select id="mediaType">
                     <option value="">All</option>
                     <option value="audio">Audio</option>
-                    <option value="etree">Live Music (etree)</option>
+                    <option value="etree">Etrees</option>
                     <option value="movies">Movies</option>
                     <option value="texts">Texts</option>
                     <option value="software">Software</option>
@@ -71,25 +71,9 @@
         const copyBtn     = document.getElementById('copyBtn');
         const downloadBtn = document.getElementById('downloadBtn');
 
-        let isRunning    = false;
-        let seenIds      = new Set();
-        let dotInterval  = null;
+        let isRunning = false;
+        let seenIds   = new Set();
 
-        // ── ドットアニメーション ──────────────────────────────
-        function startDots(baseText) {
-            let n = 0;
-            const dots = ['.', '..', '...'];
-            dotInterval = setInterval(() => {
-                n = (n + 1) % 3;
-                // baseTextの末尾の...を置換して更新
-                statusText.textContent = baseText + dots[n];
-            }, 400);
-        }
-        function stopDots() {
-            if (dotInterval) { clearInterval(dotInterval); dotInterval = null; }
-        }
-
-        // ── ボタン ────────────────────────────────────────────
         startBtn.addEventListener('click', () => {
             if (isRunning) return;
             const input = userInput.value.trim();
@@ -99,7 +83,6 @@
 
         stopBtn.addEventListener('click', () => {
             isRunning = false;
-            stopDots();
             statusText.textContent = 'Stopped.';
             startBtn.disabled = false;
             stopBtn.disabled = true;
@@ -114,27 +97,27 @@
             } catch (err) { alert('Copy failed: ' + err); }
         });
 
-        // クライアント側Blobダウンロード（サイズ制限なし）
         downloadBtn.addEventListener('click', () => {
             const content = resultArea.value;
             if (!content.trim()) return;
-            const blob = new Blob([content], { type: 'text/plain; charset=utf-8' });
-            const url  = URL.createObjectURL(blob);
-            const a    = document.createElement('a');
-            a.href     = url;
-            a.download = 'archive_urls.txt';
-            a.click();
-            URL.revokeObjectURL(url);
+            const form = document.createElement('form');
+            form.method = 'POST'; form.action = '/download';
+            const c = document.createElement('input');
+            c.type = 'hidden'; c.name = 'content'; c.value = content;
+            const f = document.createElement('input');
+            f.type = 'hidden'; f.name = 'filename'; f.value = 'archive_urls.txt';
+            form.appendChild(c); form.appendChild(f);
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
         });
 
-        // ── メイン処理 ────────────────────────────────────────
         async function startFetch(input, mediatype) {
             isRunning = true;
             seenIds.clear();
             resultArea.value = '';
             startBtn.disabled = true;
             stopBtn.disabled = false;
-            stopDots();
             statusText.textContent = 'Resolving uploader...';
 
             // Step 1: メール解決（1回だけ）
@@ -143,7 +126,6 @@
                 const res  = await fetch(`/resolve?user_input=${encodeURIComponent(input)}`);
                 const data = await res.json();
                 if (!res.ok || data.error) {
-                    stopDots();
                     statusText.textContent = 'Error: ' + (data.error || 'resolve failed');
                     startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                     return;
@@ -151,7 +133,6 @@
                 email = data.email;
                 userInput.value = email;
             } catch (err) {
-                stopDots();
                 statusText.textContent = 'Error: ' + err.message;
                 startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                 return;
@@ -181,9 +162,7 @@
                         if (seenIds.has(ident)) continue;
                         seenIds.add(ident);
                         const detail = `https://archive.org/details/${ident}`;
-                        lines.push(alsoZip.checked
-                            ? detail + '\t' + `https://archive.org/compress/${ident}`
-                            : detail);
+                        lines.push(alsoZip.checked ? detail + '\t' + `https://archive.org/compress/${ident}` : detail);
                         count++;
                     }
 
@@ -193,30 +172,24 @@
 
                     const totalStr = total ? total.toLocaleString() : '?';
                     countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
+                    statusText.textContent = `Fetching… ${count.toLocaleString()} / ${totalStr}`;
 
                     if (!data.has_more) {
-                        stopDots();
                         statusText.textContent = `Complete: ${count.toLocaleString()} items`;
                         break;
                     }
-
-                    // ドットアニメーション更新
-                    stopDots();
-                    startDots(`Fetching… ${count.toLocaleString()} / ${totalStr} `);
 
                     cursor = data.cursor;
                     await new Promise(r => setTimeout(r, 300));
 
                 } catch (err) {
                     if (!isRunning) break;
-                    stopDots();
                     statusText.textContent = `Error: ${err.message}. Retrying in 5s…`;
                     await new Promise(r => setTimeout(r, 5000));
                 }
             }
 
             isRunning = false;
-            stopDots();
             startBtn.disabled = false;
             stopBtn.disabled = true;
             if (statusText.textContent.startsWith('Fetching')) {
