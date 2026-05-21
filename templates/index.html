@@ -193,7 +193,7 @@
 
                     const totalStr = total ? total.toLocaleString() : '?';
                     countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
-                    setMsg('Fetching… '); startDots(); setCount(`${count.toLocaleString()} / ${totalStr}`);
+                    setMsg('Fetching'); startDots(); setCount(`${count.toLocaleString()} / ${totalStr}`);
 
                     if (!data.has_more) {
                         stopDots(); setMsg(`✓ Complete: ${count.toLocaleString()} items`); setCount('');
