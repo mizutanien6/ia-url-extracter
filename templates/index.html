@@ -44,7 +44,9 @@
             </div>
         </div>
 
-        <div class="status-box" id="statusText">Ready</div>
+        <div class="status-box">
+        <span id="statusMsg">Ready.</span><span id="statusDots"></span><span id="statusCount"></span>
+    </div>
 
         <div class="results-section">
             <div class="results-header">
@@ -65,8 +67,27 @@
         const alsoZip     = document.getElementById('alsoZip');
         const startBtn    = document.getElementById('startBtn');
         const stopBtn     = document.getElementById('stopBtn');
-        const statusText  = document.getElementById('statusText');
         const countBadge  = document.getElementById('countBadge');
+
+        // ── Dot animation ──
+        const DOT_CHARS = ['.', '..', '...'];
+        let dotTimer = null, dotPhase = 0;
+
+        function setMsg(text) { document.getElementById('statusMsg').textContent = text; }
+        function startDots() {
+            dotPhase = 0;
+            document.getElementById('statusDots').textContent = DOT_CHARS[0];
+            if (dotTimer) clearInterval(dotTimer);
+            dotTimer = setInterval(() => {
+                dotPhase = (dotPhase + 1) % 3;
+                document.getElementById('statusDots').textContent = DOT_CHARS[dotPhase];
+            }, 400);
+        }
+        function stopDots() {
+            if (dotTimer) { clearInterval(dotTimer); dotTimer = null; }
+            document.getElementById('statusDots').textContent = '';
+        }
+        function setCount(text) { document.getElementById('statusCount').textContent = text; }
         const resultArea  = document.getElementById('resultArea');
         const copyBtn     = document.getElementById('copyBtn');
         const downloadBtn = document.getElementById('downloadBtn');
@@ -83,7 +104,7 @@
 
         stopBtn.addEventListener('click', () => {
             isRunning = false;
-            statusText.textContent = 'Stopped.';
+            stopDots(); setMsg('Stopped.'); setCount('');
             startBtn.disabled = false;
             stopBtn.disabled = true;
         });
@@ -118,7 +139,7 @@
             resultArea.value = '';
             startBtn.disabled = true;
             stopBtn.disabled = false;
-            statusText.textContent = 'Resolving uploader...';
+            setMsg('Resolving uploader'); startDots();
 
             // Step 1: メール解決（1回だけ）
             let email = '';
@@ -126,14 +147,14 @@
                 const res  = await fetch(`/resolve?user_input=${encodeURIComponent(input)}`);
                 const data = await res.json();
                 if (!res.ok || data.error) {
-                    statusText.textContent = 'Error: ' + (data.error || 'resolve failed');
+                    stopDots(); setMsg('Error: ' + (data.error || 'resolve failed')); setCount('');
                     startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                     return;
                 }
                 email = data.email;
                 userInput.value = email;
             } catch (err) {
-                statusText.textContent = 'Error: ' + err.message;
+                stopDots(); setMsg('Error: ' + err.message); setCount('');
                 startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                 return;
             }
@@ -172,10 +193,10 @@
 
                     const totalStr = total ? total.toLocaleString() : '?';
                     countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
-                    statusText.textContent = `Fetching… ${count.toLocaleString()} / ${totalStr}`;
+                    setMsg('Fetching… '); startDots(); setCount(`${count.toLocaleString()} / ${totalStr}`);
 
                     if (!data.has_more) {
-                        statusText.textContent = `Complete: ${count.toLocaleString()} items`;
+                        stopDots(); setMsg(`✓ Complete: ${count.toLocaleString()} items`); setCount('');
                         break;
                     }
 
@@ -184,7 +205,7 @@
 
                 } catch (err) {
                     if (!isRunning) break;
-                    statusText.textContent = `Error: ${err.message}. Retrying in 5s…`;
+                    stopDots(); setMsg(`✗ ${err.message}. Retrying in 5s…`); setCount('');
                     await new Promise(r => setTimeout(r, 5000));
                 }
             }
@@ -192,8 +213,8 @@
             isRunning = false;
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            if (statusText.textContent.startsWith('Fetching')) {
-                statusText.textContent = `Complete: ${seenIds.size.toLocaleString()} items`;
+            if (document.getElementById('statusMsg').textContent.startsWith('Fetching')) {
+                stopDots(); setMsg(`✓ Complete: ${seenIds.size.toLocaleString()} items`); setCount('');
             }
         }
     </script>
