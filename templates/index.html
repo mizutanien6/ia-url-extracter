@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Internet Archive URL Extractor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="container">
+
+    <h1>Internet Archive URL Extractor</h1>
+
+    <div class="form-section">
+
+        <div class="field">
+            <label for="userInput">Email Address or Item URL</label>
+            <input type="text" id="userInput"
+                   placeholder="user@example.com  or  https://archive.org/details/...">
+        </div>
+
+        <div class="field">
+            <label for="mediatype">Media Type</label>
+            <select id="mediatype">
+                <option value="">All</option>
+                <option value="audio">Audio</option>
+                <option value="movies">Movies</option>
+                <option value="texts">Texts</option>
+                <option value="software">Software</option>
+                <option value="image">Image</option>
+                <option value="data">Data</option>
+                <option value="web">Web</option>
+            </select>
+        </div>
+
+        <div class="field checkbox-field">
+            <label>
+                <input type="checkbox" id="originalMode">
+                Also output Original ZIP links (<code>archive.org/compress/…</code>)
+            </label>
+        </div>
+
+        <div class="button-row">
+            <button id="startBtn" onclick="startScraping()">▶ Extract URLs</button>
+            <button id="stopBtn"  onclick="stopScraping()" disabled>■ Stop</button>
+        </div>
+
+    </div>
+
+    <div id="statusBox" class="status-box">Ready.</div>
+
+    <div class="results-section">
+
+        <div class="results-header">
+            <h2>Results</h2>
+            <span id="countBadge" class="count-badge" style="display:none"></span>
+        </div>
+
+        <textarea id="resultsBox" readonly placeholder="Details URLs will appear here…"></textarea>
+
+        <div class="download-buttons">
+            <button onclick="copyBox('resultsBox')">Copy URLs</button>
+            <button onclick="downloadBox('archive_details_urls.txt', detailBuf)">⬇ Download Details .txt</button>
+            <button id="btnZipDl" onclick="downloadBox('archive_compress_urls.txt', zipBuf)"
+                    style="display:none">⬇ Download Original ZIPs .txt</button>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+let evtSrc       = null;
+let reqId        = null;
+let running      = false;
+let detailBuf    = [];
+let zipBuf       = [];
+let pendingLines = [];
+let flushedCount = 0;
+let rafId        = null;
+let totalItems   = null;
+let dotInterval  = null;
+let dotPhase     = 0;
+
+// ── Batched DOM flush (requestAnimationFrame) ──────────────────────
+function scheduleFlush() {
+    if (!rafId) rafId = requestAnimationFrame(doFlush);
+}
+
+function doFlush() {
+    rafId = null;
+    if (pendingLines.length === 0) return;
+
+    const box = document.getElementById('resultsBox');
+    box.value += pendingLines.join('\n') + '\n';
+    pendingLines = [];
+    box.scrollTop = box.scrollHeight;
+
+    updateBadgeAndStatus();
+}
+
+function updateBadgeAndStatus() {
+    const badge = document.getElementById('countBadge');
+    badge.style.display = 'inline-block';
+    const collected = detailBuf.length;
+    badge.textContent  = collected.toLocaleString() + ' items';
+
+    if (running) {
+        const totalStr = totalItems !== null
+            ? ` / ${Number(totalItems).toLocaleString()}`
+            : '';
+        const dots = ['   ', '.  ', '.. ', '...'];
+        const d = dots[dotPhase];
+        setStatus(`Fetching items${d} ${collected.toLocaleString()}${totalStr} collected`);
+    }
+}
+
+// ── Dot animation helpers ──────────────────────────────────────────
+function startDotAnimation() {
+    stopDotAnimation();
+    dotPhase = 0;
+    dotInterval = setInterval(() => {
+        dotPhase = (dotPhase + 1) % 4;
+        if (running) updateBadgeAndStatus();
+    }, 400);
+}
+
+function stopDotAnimation() {
+    if (dotInterval) { clearInterval(dotInterval); dotInterval = null; }
+}
+
+// ── Main scraping logic ────────────────────────────────────────────
+function startScraping() {
+    const input = document.getElementById('userInput').value.trim();
+    if (!input) { alert('Please enter an email address or item URL.'); return; }
+
+    detailBuf    = [];
+    zipBuf       = [];
+    pendingLines = [];
+    flushedCount = 0;
+    totalItems   = null;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+
+    document.getElementById('resultsBox').value           = '';
+    document.getElementById('countBadge').style.display   = 'none';
+    document.getElementById('countBadge').textContent     = '';
+    document.getElementById('btnZipDl').style.display     = 'none';
+
+    setStatus('Starting...');
+    setRunning(true);
+    startDotAnimation();
+
+    reqId = Date.now() + '-' + Math.random().toString(36).slice(2);
+
+    const params = new URLSearchParams({
+        user_input: input,
+        mediatype:  document.getElementById('mediatype').value,
+        req_id:     reqId
+    });
+
+    evtSrc = new EventSource('/stream?' + params);
+
+    evtSrc.onmessage = function(e) {
+        const raw = e.data;
+
+        if (raw.startsWith('FOUND|')) {
+            const parts = raw.slice(6).split('|');
+            detailBuf.push(parts[0]);
+            zipBuf.push(parts[1]);
+            pendingLines.push(parts[0]);
+            scheduleFlush();
+        }
+        else if (raw.startsWith('TOTAL|')) {
+            totalItems = raw.slice(6);
+            updateBadgeAndStatus();
+        }
+        else if (raw.startsWith('EMAIL|')) {
+            document.getElementById('userInput').value = raw.slice(6);
+        }
+        else if (raw.startsWith('LOG|')) {
+            setStatus(raw.slice(4));
+        }
+        else if (raw.startsWith('COMPLETE|')) {
+            doFlush();
+            setStatus('✓ Complete: ' + Number(raw.slice(9)).toLocaleString() + ' items found.');
+            finalize();
+        }
+        else if (raw.startsWith('CANCELLED|')) {
+            doFlush();
+            setStatus('⚠ Stopped: ' + Number(raw.slice(10)).toLocaleString() + ' items collected.');
+            finalize();
+        }
+        else if (raw.startsWith('ERROR|')) {
+            doFlush();
+            setStatus('✗ Error: ' + raw.slice(6));
+            finalize();
+        }
+    };
+
+    evtSrc.onerror = function() {
+        if (running) {
+            doFlush();
+            setStatus('Connection lost.');
+            finalize();
+        }
+    };
+}
+
+function stopScraping() {
+    if (reqId) {
+        fetch('/stop', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ req_id: reqId })
+        });
+    }
+    if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    doFlush();
+    setStatus('⚠ Stopped: ' + detailBuf.length.toLocaleString() + ' items collected.');
+    finalize();
+}
+
+function finalize() {
+    stopDotAnimation();
+    if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    setRunning(false);
+
+    const originalMode = document.getElementById('originalMode').checked;
+    if (originalMode && zipBuf.length > 0) {
+        document.getElementById('btnZipDl').style.display = 'inline-block';
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+function setRunning(state) {
+    running = state;
+    document.getElementById('startBtn').disabled = state;
+    document.getElementById('stopBtn').disabled  = !state;
+}
+
+function setStatus(msg) {
+    document.getElementById('statusBox').textContent = msg;
+}
+
+function copyBox(id) {
+    const box = document.getElementById(id);
+    box.select();
+    document.execCommand('copy');
+    alert('Copied!');
+}
+
+function downloadBox(filename, arr) {
+    if (!arr || arr.length === 0) { alert('No URLs to download.'); return; }
+    const content = arr.join('\n');
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/download';
+    [['content', content], ['filename', filename]].forEach(([n, v]) => {
+        const el = document.createElement('input');
+        el.type = 'hidden'; el.name = n; el.value = v;
+        form.appendChild(el);
+    });
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+}
+</script>
+</body>
+</html>

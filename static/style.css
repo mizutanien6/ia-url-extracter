@@ -1,0 +1,244 @@
+:root {
+    --bg:           #EAD9B2;
+    --surface:      #F4EDD8;
+    --border:       #C8B088;
+    --text:         #2C1A0A;
+    --text-muted:   #6B5030;
+    --accent:       #7A3B10;
+    --accent-hover: #5C2B0A;
+    --danger:       #9A3A20;
+    --green:        #4A6B30;
+    --mono:         'Consolas', 'Courier New', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    overflow: hidden;   /* ← ページスクロールを完全禁止 */
+    margin: 0;          /* ← ブラウザデフォルト margin 除去 */
+    padding: 0;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+}
+
+.container {
+    max-width: 860px;
+    width: 100%;
+    height: 100%;       /* ← 100vh と同等だが親追従でより堅牢 */
+    padding: 44px 20px 44px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;   /* ← 子要素がはみ出してもページにスクロールバーが出ない */
+}
+
+h1 {
+    font-size: 1.65rem;
+    color: var(--accent);
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 28px;
+    flex-shrink: 0;
+}
+
+h2 {
+    font-size: 1rem;
+    color: var(--text-muted);
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* ── Form ─────────────────────────────── */
+.form-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin-bottom: 18px;
+    flex-shrink: 0;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.field > label {
+    font-size: 0.78rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-muted);
+}
+
+.checkbox-field label {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 0.92rem;
+    cursor: pointer;
+    color: var(--text);
+}
+
+.checkbox-field input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: #DDD0AA;
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+input[type="text"],
+select {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+input[type="text"]:focus,
+select:focus {
+    border-color: var(--accent);
+}
+
+select option { background: var(--surface); }
+
+.button-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+/* ── Buttons ──────────────────────────── */
+button {
+    padding: 10px 22px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.92rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+button:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+}
+
+#startBtn {
+    background: var(--accent);
+    color: #fff;
+}
+#startBtn:hover:not(:disabled) { background: var(--accent-hover); }
+
+#stopBtn {
+    background: var(--danger);
+    color: #fff;
+}
+#stopBtn:hover:not(:disabled) { opacity: 0.82; }
+
+/* ── Status ───────────────────────────── */
+.status-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 16px;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    min-height: 42px;
+    margin-bottom: 18px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    flex-shrink: 0;
+}
+
+/* ── Results ──────────────────────────── */
+.results-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 24px;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.results-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-shrink: 0;
+}
+
+.count-badge {
+    background: var(--accent);
+    color: #fff;
+    border-radius: 20px;
+    padding: 2px 13px;
+    font-size: 0.78rem;
+    font-weight: bold;
+    letter-spacing: 0.04em;
+}
+
+textarea {
+    width: 100%;
+    flex: 1;
+    min-height: 120px;
+    resize: none;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.83rem;
+    outline: none;
+    line-height: 1.55;
+}
+
+/* ── Download buttons ─────────────────── */
+.download-buttons {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    flex-shrink: 0;
+}
+
+.download-buttons button {
+    background: var(--green);
+    color: #fff;
+    font-weight: normal;
+    padding: 8px 18px;
+    font-size: 0.86rem;
+}
+
+.download-buttons button:hover { opacity: 0.84; }
