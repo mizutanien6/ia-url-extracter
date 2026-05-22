@@ -70,7 +70,7 @@
         const countBadge  = document.getElementById('countBadge');
 
         // ── Dot animation ──
-        const DOT_CHARS = ['.', '..', '...'];
+        const DOT_CHARS = ['', '.',  '..', '...'];
         let dotTimer = null, dotPhase = 0;
 
         function setMsg(text) { document.getElementById('statusMsg').textContent = text; }
@@ -79,7 +79,7 @@
             document.getElementById('statusDots').textContent = DOT_CHARS[0];
             if (dotTimer) clearInterval(dotTimer);
             dotTimer = setInterval(() => {
-                dotPhase = (dotPhase + 1) % 3;
+                dotPhase = (dotPhase + 1) % 4;
                 document.getElementById('statusDots').textContent = DOT_CHARS[dotPhase];
             }, 400);
         }
@@ -92,8 +92,20 @@
         const copyBtn     = document.getElementById('copyBtn');
         const downloadBtn = document.getElementById('downloadBtn');
 
-        let isRunning = false;
-        let seenIds   = new Set();
+        let isRunning       = false;
+        let seenIds         = new Set();
+        let detailLines     = [];
+        let abortController = null;
+
+        function renderResults() {
+            const useZip = alsoZip.checked;
+            resultArea.value = detailLines
+                .map(u => useZip ? u.replace('/details/', '/compress/') : u)
+                .join('\n');
+            resultArea.scrollTop = resultArea.scrollHeight;
+        }
+
+        alsoZip.addEventListener('change', renderResults);
 
         startBtn.addEventListener('click', () => {
             if (isRunning) return;
@@ -104,7 +116,10 @@
 
         stopBtn.addEventListener('click', () => {
             isRunning = false;
-            stopDots(); setMsg('Stopped.'); setCount('');
+            if (abortController) abortController.abort();
+            stopDots();
+            setMsg(`※ Stopped: ${detailLines.length.toLocaleString()} items collected.`);
+            setCount('');
             startBtn.disabled = false;
             stopBtn.disabled = true;
         });
@@ -121,22 +136,21 @@
         downloadBtn.addEventListener('click', () => {
             const content = resultArea.value;
             if (!content.trim()) return;
-            const form = document.createElement('form');
-            form.method = 'POST'; form.action = '/download';
-            const c = document.createElement('input');
-            c.type = 'hidden'; c.name = 'content'; c.value = content;
-            const f = document.createElement('input');
-            f.type = 'hidden'; f.name = 'filename'; f.value = 'archive_urls.txt';
-            form.appendChild(c); form.appendChild(f);
-            document.body.appendChild(form);
-            form.submit();
-            document.body.removeChild(form);
+            const blob = new Blob([content], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = alsoZip.checked ? 'archive_urls_compress.txt' : 'archive_urls.txt';
+            a.click();
+            URL.revokeObjectURL(a.href);
         });
 
         async function startFetch(input, mediatype) {
             isRunning = true;
+            abortController = new AbortController();
             seenIds.clear();
+            detailLines = [];
             resultArea.value = '';
+            countBadge.textContent = '0 items';
             startBtn.disabled = true;
             stopBtn.disabled = false;
             setMsg('Resolving uploader'); startDots();
@@ -171,24 +185,24 @@
                 if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
 
                 try {
-                    const res  = await fetch(url);
+                    const res  = await fetch(url, { signal: abortController.signal });
                     const data = await res.json();
                     if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
 
                     if (total === 0 && data.total) total = data.total;
 
-                    const lines = [];
+                    const newLines = [];
                     for (const ident of data.items) {
                         if (!isRunning) break;
                         if (seenIds.has(ident)) continue;
                         seenIds.add(ident);
-                        const detail = `https://archive.org/details/${ident}`;
-                        lines.push(alsoZip.checked ? detail + '\t' + `https://archive.org/compress/${ident}` : detail);
+                        newLines.push(`https://archive.org/details/${ident}`);
                         count++;
                     }
 
-                    if (lines.length) {
-                        resultArea.value += (resultArea.value ? '\n' : '') + lines.join('\n');
+                    if (newLines.length) {
+                        detailLines.push(...newLines);
+                        renderResults();
                     }
 
                     const totalStr = total ? total.toLocaleString() : '?';

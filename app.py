@@ -1,7 +1,7 @@
 from gevent import monkey
 monkey.patch_all()
 
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, jsonify
 import urllib.request
 import urllib.parse
 import json
@@ -116,15 +116,6 @@ def batch():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/download", methods=["POST"])
-def download():
-    content  = request.form.get("content", "")
-    filename = request.form.get("filename", "archive_urls.txt")
-    buf = io.BytesIO(content.encode("utf-8"))
-    return send_file(buf, as_attachment=True, download_name=filename, mimetype="text/plain")
-
 
 if __name__ == "__main__":
     app.run(debug=True)
