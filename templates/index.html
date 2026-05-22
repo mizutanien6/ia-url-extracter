@@ -120,6 +120,7 @@
             stopDots();
             setMsg(`※ Stopped: ${detailLines.length.toLocaleString()} items collected.`);
             setCount('');
+            countBadge.textContent = '0 items';
             startBtn.disabled = false;
             stopBtn.disabled = true;
         });
