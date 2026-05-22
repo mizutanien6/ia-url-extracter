@@ -34,7 +34,7 @@
             <div class="field checkbox-field">
                 <label>
                     <input type="checkbox" id="alsoZip">
-                    ALSO OUTPUT ORIGINAL ZIP LINKS&nbsp;( <code>archive.org/compress/…</code> )
+                    <span>ALSO OUTPUT ORIGINAL ZIP LINKS <code>(archive.org/compress/…)</code></span>
                 </label>
             </div>
 
@@ -150,7 +150,6 @@
             seenIds.clear();
             detailLines = [];
             resultArea.value = '';
-            countBadge.textContent = '0 items';
             startBtn.disabled = true;
             stopBtn.disabled = false;
             setMsg('Resolving uploader'); startDots();

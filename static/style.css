@@ -91,12 +91,24 @@ h2 {
     color: var(--text);
 }
 
+.checkbox-field br {
+    display: none;
+}
+
+@media (max-width: 600px) {
+    .checkbox-field code {
+        display: block;
+        width: fit-content;
+    }
+}
+
 .checkbox-field input[type="checkbox"] {
     width: 15px;
     height: 15px;
     accent-color: var(--accent);
     cursor: pointer;
     flex-shrink: 0;
+    margin-top: -1px;
 }
 
 code {
@@ -260,3 +272,31 @@ textarea {
 }
 
 .download-buttons button:hover { opacity: 0.84; }
+/* ── Mobile ───────────────────────────── */
+@media (max-width: 600px) {
+    html, body {
+        overflow: auto;
+        height: auto;
+    }
+
+    .container {
+        height: auto;
+        overflow: visible;
+        padding: 14px 14px 40px;
+    }
+
+    h1 {
+        font-size: 1.2rem;
+        margin-bottom: 20px;
+    }
+
+    .results-section {
+        flex: none;
+        overflow: visible;
+    }
+
+    textarea {
+        min-height: 240px;
+        resize: vertical;
+    }
+}
