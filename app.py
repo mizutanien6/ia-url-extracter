@@ -6,10 +6,8 @@ import urllib.request
 import urllib.parse
 import json
 import time
-import io
 
 app = Flask(__name__)
-
 
 class IAScraper:
     def fetch_url(self, url, retries=5, wait=5.0):
@@ -24,9 +22,17 @@ class IAScraper:
                 else:
                     raise
 
-    def resolve_email(self, user_input):
+    # ── 入力解決 ────────────────────────────────────────────
+    def resolve_input(self, user_input):
+        """
+        Returns:
+          {"type": "uploader", "email": "..."}
+          {"type": "collection", "id": "...", "title": "..."}
+        """
+        # メールアドレス直接入力
         if "@" in user_input and not user_input.startswith("http"):
-            return user_input
+            return {"type": "uploader", "email": user_input}
+
         if user_input.startswith("https://archive.org/details/"):
             path = (
                 user_input
@@ -37,49 +43,90 @@ class IAScraper:
             if path.startswith("@"):
                 raise ValueError(
                     "User profile URLs (@) are not supported. "
-                    "Please enter an email address or item URL."
+                    "Please enter an email address or item/collection URL."
                 )
-            return self._email_from_metadata(path)
-        raise ValueError("Please enter an email address or item URL.")
+            return self._resolve_from_metadata(path)
 
-    def _email_from_metadata(self, identifier):
+        raise ValueError("Please enter an email address or archive.org URL.")
+
+    def _resolve_from_metadata(self, identifier):
         data = self.fetch_url(f"https://archive.org/metadata/{identifier}")
-        email = data.get("metadata", {}).get("uploader", "")
-        if not email or "@" not in email:
-            email = data.get("uploader", "")
+        meta = data.get("metadata", {})
+        mediatype = meta.get("mediatype", "")
+
+        if mediatype == "collection":
+            return {
+                "type":  "collection",
+                "id":    identifier,
+                "title": meta.get("title", identifier),
+            }
+
+        # アイテムURL → uploaderメールを取得
+        email = meta.get("uploader", "") or data.get("uploader", "")
         if not email or "@" not in email:
             raise ValueError("Could not retrieve uploader email from metadata.")
-        return email
+        return {"type": "uploader", "email": email}
 
-    def fetch_batch(self, email, mediatype="", cursor=None):
-        base = "https://archive.org/services/search/v1/scrape"
+    # ── Uploader バッチ（Scrape API / カーソルベース）────────
+    def fetch_batch_uploader(self, email, mediatype="", cursor=None):
+        base  = "https://archive.org/services/search/v1/scrape"
         query = f"uploader:{email}"
         if mediatype:
             query += f" AND mediatype:{mediatype}"
 
         params = [
-            ("q", query),
+            ("q",      query),
             ("fields", "identifier"),
-            ("sorts", "addeddate asc"),
-            ("count", 10000),   # 1000→10000: リクエスト数を1/10に削減
+            ("sorts",  "addeddate asc"),
+            ("count",  10000),
         ]
         if cursor:
             params.append(("cursor", cursor))
 
-        data = self.fetch_url(base + "?" + urllib.parse.urlencode(params))
-
+        data  = self.fetch_url(base + "?" + urllib.parse.urlencode(params))
         items = [
             item.get("identifier")
             for item in data.get("items", [])
             if isinstance(item, dict) and item.get("identifier")
         ]
         return {
-            "items": items,
-            "cursor": data.get("cursor"),
-            "total": data.get("total", 0),
-            "has_more": bool(data.get("cursor") and data.get("items"))
+            "items":    items,
+            "cursor":   data.get("cursor"),
+            "total":    data.get("total", 0),
+            "has_more": bool(data.get("cursor") and data.get("items")),
         }
 
+    # ── Collection バッチ（advancedsearch / ページベース）───
+    def fetch_batch_collection(self, collection_id, mediatype="", cursor=None):
+        base  = "https://archive.org/services/search/v1/scrape"
+        query = f"collection:{collection_id}"
+        if mediatype:
+            query += f" AND mediatype:{mediatype}"
+
+        params = [
+            ("q",      query),
+            ("fields", "identifier"),
+            ("sorts",  "addeddate asc"),
+            ("count",  10000),
+        ]
+        if cursor:
+            params.append(("cursor", cursor))
+
+        data  = self.fetch_url(base + "?" + urllib.parse.urlencode(params))
+        items = [
+            item.get("identifier")
+            for item in data.get("items", [])
+            if isinstance(item, dict) and item.get("identifier")
+        ]
+        return {
+            "items":    items,
+            "cursor":   data.get("cursor"),
+            "total":    data.get("total", 0),
+            "has_more": bool(data.get("cursor") and data.get("items")),
+        }
+
+
+# ── Routes ──────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -88,34 +135,46 @@ def index():
 
 @app.route("/resolve")
 def resolve():
-    """メール解決専用エンドポイント（バッチ開始前に1回だけ呼ぶ）"""
+    """入力解決エンドポイント（バッチ開始前に1回だけ呼ぶ）"""
     user_input = request.args.get("user_input", "").strip()
     if not user_input:
         return jsonify({"error": "No input provided"}), 400
     try:
         scraper = IAScraper()
-        email = scraper.resolve_email(user_input)
-        return jsonify({"email": email})
+        result  = scraper.resolve_input(user_input)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
 @app.route("/batch")
 def batch():
-    """emailを直接受け取る（毎回のメタデータ解決をなくす）"""
-    email     = request.args.get("email", "").strip()
-    mediatype = request.args.get("mediatype", "").strip()
-    cursor    = request.args.get("cursor", "").strip() or None
-
-    if not email or "@" not in email:
-        return jsonify({"error": "Valid email address required"}), 400
+    mode = request.args.get("mode", "uploader").strip()
 
     try:
         scraper = IAScraper()
-        result = scraper.fetch_batch(email, mediatype, cursor)
+
+        if mode == "collection":
+            collection_id = request.args.get("collection_id", "").strip()
+            mediatype     = request.args.get("mediatype", "").strip()
+            cursor        = request.args.get("cursor", "").strip() or None
+            if not collection_id:
+                return jsonify({"error": "collection_id required"}), 400
+            result = scraper.fetch_batch_collection(collection_id, mediatype, cursor)
+
+        else:  # uploader
+            email     = request.args.get("email", "").strip()
+            mediatype = request.args.get("mediatype", "").strip()
+            cursor    = request.args.get("cursor", "").strip() or None
+            if not email or "@" not in email:
+                return jsonify({"error": "Valid email address required"}), 400
+            result = scraper.fetch_batch_uploader(email, mediatype, cursor)
+
         return jsonify(result)
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0')

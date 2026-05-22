@@ -12,8 +12,9 @@
 
         <div class="form-section">
             <div class="field">
-                <label for="userInput">EMAIL ADDRESS OR ITEM URL</label>
-                <input type="text" id="userInput" placeholder="user@example.com  or  https://archive.org/details/...">
+                <label for="userInput">EMAIL ADDRESS, ITEM URL OR COLLECTION URL</label>
+                <input type="text" id="userInput"
+                    placeholder="user@example.com  or  https://archive.org/details/…">
             </div>
 
             <div class="field">
@@ -45,8 +46,8 @@
         </div>
 
         <div class="status-box">
-        <span id="statusMsg">Ready.</span><span id="statusDots"></span><span id="statusCount"></span>
-    </div>
+            <span id="statusMsg">Ready.</span><span id="statusDots"></span><span id="statusCount"></span>
+        </div>
 
         <div class="results-section">
             <div class="results-header">
@@ -68,11 +69,13 @@
         const startBtn    = document.getElementById('startBtn');
         const stopBtn     = document.getElementById('stopBtn');
         const countBadge  = document.getElementById('countBadge');
+        const resultArea  = document.getElementById('resultArea');
+        const copyBtn     = document.getElementById('copyBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
 
-        // ── Dot animation ──
-        const DOT_CHARS = ['', '.',  '..', '...'];
+        // ── ドットアニメーション ──
+        const DOT_CHARS = ['', '.', '..', '...'];
         let dotTimer = null, dotPhase = 0;
-
         function setMsg(text) { document.getElementById('statusMsg').textContent = text; }
         function startDots() {
             dotPhase = 0;
@@ -88,9 +91,6 @@
             document.getElementById('statusDots').textContent = '';
         }
         function setCount(text) { document.getElementById('statusCount').textContent = text; }
-        const resultArea  = document.getElementById('resultArea');
-        const copyBtn     = document.getElementById('copyBtn');
-        const downloadBtn = document.getElementById('downloadBtn');
 
         let isRunning       = false;
         let seenIds         = new Set();
@@ -110,7 +110,7 @@
         startBtn.addEventListener('click', () => {
             if (isRunning) return;
             const input = userInput.value.trim();
-            if (!input) { statusText.textContent = 'Please enter an email or item URL.'; return; }
+            if (!input) { setMsg('Please enter an email or URL.'); return; }
             startFetch(input, mediaType.value);
         });
 
@@ -144,6 +144,7 @@
             URL.revokeObjectURL(a.href);
         });
 
+        // ── メインフェッチ ──────────────────────────────────
         async function startFetch(input, mediatype) {
             countBadge.textContent = '0 items';
             isRunning = true;
@@ -153,10 +154,10 @@
             resultArea.value = '';
             startBtn.disabled = true;
             stopBtn.disabled = false;
-            setMsg('Resolving uploader'); startDots();
+            setMsg('Resolving'); startDots();
 
-            // Step 1: メール解決（1回だけ）
-            let email = '';
+            // Step 1: 入力解決
+            let resolved;
             try {
                 const res  = await fetch(`/resolve?user_input=${encodeURIComponent(input)}`);
                 const data = await res.json();
@@ -165,8 +166,7 @@
                     startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
                     return;
                 }
-                email = data.email;
-                userInput.value = email;
+                resolved = data;  // {type, email} or {type, id, title}
             } catch (err) {
                 stopDots(); setMsg('Error: ' + err.message); setCount('');
                 startBtn.disabled = false; stopBtn.disabled = true; isRunning = false;
@@ -175,13 +175,21 @@
 
             if (!isRunning) return;
 
-            // Step 2: バッチ取得ループ
-            let cursor = null;
-            let count  = 0;
-            let total  = 0;
+            // Step 2: モード別バッチループ
+            if (resolved.type === 'collection') {
+                await fetchCollectionLoop(resolved, mediatype);
+            } else {
+                userInput.value = resolved.email;   // メール確定表示
+                await fetchUploaderLoop(resolved.email, mediatype);
+            }
+        }
+
+        // ── Uploader ループ（カーソルベース）───────────────
+        async function fetchUploaderLoop(email, mediatype) {
+            let cursor = null, count = 0, total = 0;
 
             while (isRunning) {
-                let url = `/batch?email=${encodeURIComponent(email)}&mediatype=${encodeURIComponent(mediatype)}`;
+                let url = `/batch?mode=uploader&email=${encodeURIComponent(email)}&mediatype=${encodeURIComponent(mediatype)}`;
                 if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
 
                 try {
@@ -190,46 +198,98 @@
                     if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
 
                     if (total === 0 && data.total) total = data.total;
+                    count = addItems(data.items, count);
+                    updateUI(count, total, 'Fetching');
 
-                    const newLines = [];
-                    for (const ident of data.items) {
-                        if (!isRunning) break;
-                        if (seenIds.has(ident)) continue;
-                        seenIds.add(ident);
-                        newLines.push(`https://archive.org/details/${ident}`);
-                        count++;
-                    }
-
-                    if (newLines.length) {
-                        detailLines.push(...newLines);
-                        renderResults();
-                    }
-
-                    const totalStr = total ? total.toLocaleString() : '?';
-                    countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
-                    setMsg('Fetching'); startDots(); setCount(`${count.toLocaleString()} / ${totalStr}`);
-
-                    if (!data.has_more) {
-                        stopDots(); setMsg(`✓ Complete: ${count.toLocaleString()} items`); setCount('');
-                        break;
-                    }
-
+                    if (!data.has_more) { finalize(count); break; }
                     cursor = data.cursor;
-                    await new Promise(r => setTimeout(r, 300));
-
+                    await sleep(300);
                 } catch (err) {
                     if (!isRunning) break;
-                    stopDots(); setMsg(`✗ ${err.message}. Retrying in 5s…`); setCount('');
-                    await new Promise(r => setTimeout(r, 5000));
+                    await retryWait(err.message);
                 }
             }
+            finishRun(count);
+        }
 
+        // ── Collection ループ（ページベース）───────────────
+        async function fetchCollectionLoop(resolved, mediatype) {
+            let cursor = null, count = 0, total = 0;
+            setMsg(`Collection: ${resolved.title}`); startDots();
+
+            while (isRunning) {
+                let url = `/batch?mode=collection&collection_id=${encodeURIComponent(resolved.id)}&mediatype=${encodeURIComponent(mediatype)}`;
+                if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+
+                try {
+                    const res  = await fetch(url, { signal: abortController.signal });
+                    const data = await res.json();
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+
+                    if (total === 0 && data.total) total = data.total;
+                    count = addItems(data.items, count);
+                    updateUI(count, total, `Collection: ${resolved.title}`);
+
+                    if (!data.has_more) { finalize(count); break; }
+                    cursor = data.cursor;
+                    await sleep(300);
+                } catch (err) {
+                    if (!isRunning) break;
+                    await retryWait(err.message);
+                }
+            }
+            finishRun(count);
+        }
+
+        // ── ユーティリティ ──────────────────────────────────
+        function addItems(items, count) {
+            const newLines = [];
+            for (const ident of items) {
+                if (!isRunning) break;
+                if (seenIds.has(ident)) continue;
+                seenIds.add(ident);
+                newLines.push(`https://archive.org/details/${ident}`);
+                count++;
+            }
+            if (newLines.length) {
+                detailLines.push(...newLines);
+                renderResults();
+            }
+            return count;
+        }
+
+        function updateUI(count, total, msgPrefix) {
+            const totalStr = total ? total.toLocaleString() : '?';
+            countBadge.textContent = `${count.toLocaleString()} / ${totalStr} items`;
+            setMsg(msgPrefix); startDots();
+            setCount(`${count.toLocaleString()} / ${totalStr}`);
+        }
+
+        function finalize(count) {
+            stopDots();
+            setMsg(`✓ Complete: ${count.toLocaleString()} items`);
+            setCount('');
+        }
+
+        function finishRun(count) {
             isRunning = false;
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            if (document.getElementById('statusMsg').textContent.startsWith('Fetching')) {
-                stopDots(); setMsg(`✓ Complete: ${seenIds.size.toLocaleString()} items`); setCount('');
+            const msg = document.getElementById('statusMsg').textContent;
+            if (!msg.startsWith('✓') && !msg.startsWith('※')) {
+                stopDots();
+                setMsg(`✓ Complete: ${seenIds.size.toLocaleString()} items`);
+                setCount('');
             }
+        }
+
+        function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        async function retryWait(errMsg) {
+            stopDots();
+            setMsg(`✗ ${errMsg}. Retrying in 5s…`);
+            setCount('');
+            await sleep(5000);
         }
     </script>
 </body>
