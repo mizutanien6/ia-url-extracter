@@ -120,7 +120,6 @@
             stopDots();
             setMsg(`※ Stopped: ${detailLines.length.toLocaleString()} items collected.`);
             setCount('');
-            countBadge.textContent = '0 items';
             startBtn.disabled = false;
             stopBtn.disabled = true;
         });
@@ -146,6 +145,7 @@
         });
 
         async function startFetch(input, mediatype) {
+            countBadge.textContent = '0 items';
             isRunning = true;
             abortController = new AbortController();
             seenIds.clear();
