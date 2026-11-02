@@ -96,11 +96,12 @@
         let seenIds         = new Set();
         let detailLines     = [];
         let abortController = null;
+        let rawUrlMode      = false;   // true: Blogger（items がそのままURL）
 
         function renderResults() {
             const useZip = alsoZip.checked;
             resultArea.value = detailLines
-                .map(u => useZip ? u.replace('/details/', '/compress/') : u)
+                .map(u => (useZip && !rawUrlMode) ? u.replace('/details/', '/compress/') : u)
                 .join('\n');
             resultArea.scrollTop = resultArea.scrollHeight;
         }
@@ -139,7 +140,8 @@
             const blob = new Blob([content], { type: 'text/plain' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = alsoZip.checked ? 'archive_urls_compress.txt' : 'archive_urls.txt';
+            a.download = rawUrlMode ? 'blog_urls.txt'
+                       : (alsoZip.checked ? 'archive_urls_compress.txt' : 'archive_urls.txt');
             a.click();
             URL.revokeObjectURL(a.href);
         });
@@ -148,6 +150,7 @@
         async function startFetch(input, mediatype) {
             countBadge.textContent = '0 items';
             isRunning = true;
+            rawUrlMode = false;
             abortController = new AbortController();
             seenIds.clear();
             detailLines = [];
@@ -176,7 +179,10 @@
             if (!isRunning) return;
 
             // Step 2: モード別バッチループ
-            if (resolved.type === 'collection') {
+            if (resolved.type === 'blogger') {
+                rawUrlMode = true;
+                await fetchBloggerLoop(resolved);
+            } else if (resolved.type === 'collection') {
                 await fetchCollectionLoop(resolved, mediatype);
             } else {
                 userInput.value = resolved.email;   // メール確定表示
@@ -200,6 +206,35 @@
                     if (total === 0 && data.total) total = data.total;
                     count = addItems(data.items, count);
                     updateUI(count, total, 'Fetching');
+
+                    if (!data.has_more) { finalize(count); break; }
+                    cursor = data.cursor;
+                    await sleep(300);
+                } catch (err) {
+                    if (!isRunning) break;
+                    await retryWait(err.message);
+                }
+            }
+            finishRun(count);
+        }
+
+        // ── Blogger ループ（サイトマップ単位）──────────────
+        async function fetchBloggerLoop(resolved) {
+            let cursor = null, count = 0, total = 0;
+            setMsg('Blogger sitemap'); startDots();
+
+            while (isRunning) {
+                let url = `/batch?mode=blogger&blog_url=${encodeURIComponent(resolved.blog_url)}`;
+                if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+
+                try {
+                    const res  = await fetch(url, { signal: abortController.signal });
+                    const data = await res.json();
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+
+                    if (total === 0 && data.total) total = data.total;
+                    count = addItems(data.items, count);
+                    updateUI(count, total, 'Blogger sitemap');
 
                     if (!data.has_more) { finalize(count); break; }
                     cursor = data.cursor;
@@ -248,7 +283,7 @@
                 if (!isRunning) break;
                 if (seenIds.has(ident)) continue;
                 seenIds.add(ident);
-                newLines.push(`https://archive.org/details/${ident}`);
+                newLines.push(rawUrlMode ? ident : `https://archive.org/details/${ident}`);
                 count++;
             }
             if (newLines.length) {
