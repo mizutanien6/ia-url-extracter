@@ -100,7 +100,8 @@
 
         function renderResults() {
             const useZip = alsoZip.checked;
-            resultArea.value = detailLines
+            const lines = rawUrlMode ? [...detailLines].sort() : detailLines;
+            resultArea.value = lines
                 .map(u => (useZip && !rawUrlMode) ? u.replace('/details/', '/compress/') : u)
                 .join('\n');
             resultArea.scrollTop = resultArea.scrollHeight;
