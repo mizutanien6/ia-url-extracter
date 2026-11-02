@@ -6,21 +6,28 @@ import urllib.request
 import urllib.parse
 import json
 import time
+import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
 class IAScraper:
-    def fetch_url(self, url, retries=5, wait=5.0):
+    def _open(self, url, retries=5, wait=5.0):
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         for attempt in range(1, retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=30) as res:
-                    return json.loads(res.read().decode())
+                    return res.read().decode("utf-8")
             except Exception:
                 if attempt < retries:
                     time.sleep(wait * attempt)
                 else:
                     raise
+
+    def fetch_url(self, url, retries=5, wait=5.0):
+        return json.loads(self._open(url, retries, wait))
+
+    def fetch_text(self, url, retries=5, wait=5.0):
+        return self._open(url, retries, wait)
 
     # ── 入力解決 ────────────────────────────────────────────
     def resolve_input(self, user_input):
@@ -28,6 +35,7 @@ class IAScraper:
         Returns:
           {"type": "uploader", "email": "..."}
           {"type": "collection", "id": "...", "title": "..."}
+          {"type": "blogger", "blog_url": "..."}
         """
         # メールアドレス直接入力
         if "@" in user_input and not user_input.startswith("http"):
@@ -46,6 +54,10 @@ class IAScraper:
                     "Please enter an email address or item/collection URL."
                 )
             return self._resolve_from_metadata(path)
+
+        # archive.org 以外のURL → Blogger（サイトマップ）として扱う
+        if user_input.startswith("http://") or user_input.startswith("https://"):
+            return {"type": "blogger", "blog_url": user_input}
 
         raise ValueError("Please enter an email address or archive.org URL.")
 
@@ -125,6 +137,74 @@ class IAScraper:
             "has_more": bool(data.get("cursor") and data.get("items")),
         }
 
+    # ── Blogger バッチ（サイトマップ / 子サイトマップ単位）──
+    @staticmethod
+    def _local(tag):
+        return tag.split("}")[-1]
+
+    def _parse_sitemap(self, xml_text):
+        """Returns (記事URLのリスト, 子サイトマップURLのリスト)"""
+        root = ET.fromstring(xml_text)
+        urls, children = [], []
+        for node in root:
+            kind = self._local(node.tag)
+            loc = None
+            for sub in node.iter():
+                if self._local(sub.tag) == "loc" and sub.text:
+                    loc = sub.text.strip()
+                    break
+            if not loc:
+                continue
+            if kind == "url":
+                urls.append(loc)
+            elif kind == "sitemap":
+                children.append(loc)
+        return urls, children
+
+    def _collect_sitemap(self, sitemap_url, depth=0):
+        """入れ子サイトマップを再帰的に辿って全URLを返す"""
+        urls, children = self._parse_sitemap(self.fetch_text(sitemap_url))
+        if depth < 5:
+            for child in children:
+                time.sleep(0.5)  # サーバー負荷軽減
+                urls.extend(self._collect_sitemap(child, depth + 1))
+        return urls
+
+    def fetch_batch_blogger(self, blog_url, cursor=None):
+        blog_url = blog_url.strip()
+        if blog_url.lower().endswith(".xml"):
+            sitemap_url = blog_url
+        else:
+            sitemap_url = f"{blog_url.rstrip('/')}/sitemap.xml"
+
+        urls, children = self._parse_sitemap(self.fetch_text(sitemap_url))
+
+        # 入れ子なし → 1回で全部返す
+        if not children:
+            items = sorted(set(urls))
+            return {
+                "items":    items,
+                "cursor":   None,
+                "total":    len(items),
+                "has_more": False,
+            }
+
+        # 入れ子あり → cursor = 次に処理する子サイトマップの番号
+        idx = int(cursor) if cursor else 0
+        items = list(urls) if idx == 0 else []
+        if idx < len(children):
+            items.extend(self._collect_sitemap(children[idx], depth=1))
+        items = sorted(set(items))
+
+        nxt = idx + 1
+        has_more = nxt < len(children)
+        return {
+            "items":    items,
+            "cursor":   str(nxt) if has_more else None,
+            "total":    0,
+            "has_more": has_more,
+        }
+
 
 # ── Routes ──────────────────────────────────────────────────
 
@@ -154,7 +234,14 @@ def batch():
     try:
         scraper = IAScraper()
 
-        if mode == "collection":
+        if mode == "blogger":
+            blog_url = request.args.get("blog_url", "").strip()
+            cursor   = request.args.get("cursor", "").strip() or None
+            if not blog_url:
+                return jsonify({"error": "blog_url required"}), 400
+            result = scraper.fetch_batch_blogger(blog_url, cursor)
+
+        elif mode == "collection":
             collection_id = request.args.get("collection_id", "").strip()
             mediatype     = request.args.get("mediatype", "").strip()
             cursor        = request.args.get("cursor", "").strip() or None
